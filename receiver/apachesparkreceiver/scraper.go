@@ -60,11 +60,15 @@ func (s *sparkScraper) scrape(_ context.Context) (pmetric.Metrics, error) {
 		return pmetric.NewMetrics(), errors.Join(errFailedAppIDCollection, err)
 	}
 
+	s.logger.Info("Total spark applications", zap.Int("count", len(apps)))
+
 	// Limit the number of applications checked
 	appsToCheck := apps
 	if s.config.Limits.Count > 0 && len(apps) > s.config.Limits.Count {
 		appsToCheck = apps[:s.config.Limits.Count]
 	}
+
+	s.logger.Info("Spark applications after count limit", zap.Int("count", len(appsToCheck)))
 
 	// Filter out any applications older than LastUpdatedEpochThreshold
 	var recentApps []models.Application
@@ -83,6 +87,8 @@ func (s *sparkScraper) scrape(_ context.Context) (pmetric.Metrics, error) {
 			}
 		}
 	}
+
+	s.logger.Info("Spark applications after time limit", zap.Int("count", len(appsToCheck)))
 
 	// Apply ApplicationNames and ApplicationIDs filters
 	var allowedApps []models.Application
