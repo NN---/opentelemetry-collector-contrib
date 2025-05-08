@@ -52,7 +52,6 @@ func (s *sparkScraper) start(ctx context.Context, host component.Host) (err erro
 }
 
 func (s *sparkScraper) scrape(_ context.Context) (pmetric.Metrics, error) {
-	now := pcommon.NewTimestampFromTime(time.Now())
 	var scrapeErrors scrapererror.ScrapeErrors
 
 	// Call applications endpoint to get ids and names for all apps in the cluster
@@ -61,22 +60,52 @@ func (s *sparkScraper) scrape(_ context.Context) (pmetric.Metrics, error) {
 		return pmetric.NewMetrics(), errors.Join(errFailedAppIDCollection, err)
 	}
 
-	// Check apps against allowed app names from config
-	var allowedApps []models.Application
+	// Limit the number of applications checked
+	appsToCheck := apps
+	if s.config.Limits.Count > 0 && len(apps) > s.config.Limits.Count {
+		appsToCheck = apps[:s.config.Limits.Count]
+	}
 
-	// If no app names specified, allow all apps
+	// Filter out any applications older than LastUpdatedEpochThreshold
+	var recentApps []models.Application
+
+	if s.config.Limits.LastUpdatedEpochThreshold.Milliseconds() <= 0 {
+		recentApps = appsToCheck
+	} else {
+		lastUpdatedEpoch := time.Now().UnixMilli() - s.config.Limits.LastUpdatedEpochThreshold.Milliseconds()
+	loop:
+		for _, app := range appsToCheck {
+			for _, attempt := range app.Attempts {
+				if attempt.LastUpdatedEpoch > lastUpdatedEpoch {
+					recentApps = append(recentApps, app)
+					break loop
+				}
+			}
+		}
+	}
+
+	// Apply ApplicationNames and ApplicationIDs filters
+	var allowedApps []models.Application
 	switch {
-	case len(s.config.ApplicationNames) == 0:
-		allowedApps = apps
+	case len(s.config.ApplicationNames) == 0 && len(s.config.ApplicationIDs) == 0:
+		allowedApps = recentApps
 	default:
-		// Some allowed app names specified, compare to app names from applications endpoint
-		appMap := make(map[string][]models.Application)
-		for _, app := range apps {
-			appMap[app.Name] = append(appMap[app.Name], app)
+		nameMap := make(map[string][]models.Application)
+		idMap := make(map[string][]models.Application)
+		for _, app := range recentApps {
+			nameMap[app.Name] = append(nameMap[app.Name], app)
+			idMap[app.ApplicationID] = append(idMap[app.ApplicationID], app)
 		}
 
+		// Add apps matching names
 		for _, name := range s.config.ApplicationNames {
-			if apps, ok := appMap[name]; ok {
+			if apps, ok := nameMap[name]; ok {
+				allowedApps = append(allowedApps, apps...)
+			}
+		}
+		// Add apps matching IDs
+		for _, id := range s.config.ApplicationIDs {
+			if apps, ok := idMap[id]; ok {
 				allowedApps = append(allowedApps, apps...)
 			}
 		}
@@ -85,6 +114,10 @@ func (s *sparkScraper) scrape(_ context.Context) (pmetric.Metrics, error) {
 		}
 	}
 
+	s.logger.Info("Scaping spark applications", zap.Int("count", len(allowedApps)))
+
+	appsTime := s.extractApplicationsTime(allowedApps)
+
 	// Get stats from the 'metrics' endpoint
 	clusterStats, err := s.client.ClusterStats()
 	if err != nil {
@@ -92,12 +125,14 @@ func (s *sparkScraper) scrape(_ context.Context) (pmetric.Metrics, error) {
 		s.logger.Warn("Failed to scrape cluster stats", zap.Error(err))
 	} else {
 		for _, app := range allowedApps {
-			s.recordCluster(clusterStats, now, app.ApplicationID, app.Name)
+			s.recordCluster(clusterStats, appsTime[app.ApplicationID], app.ApplicationID, app.Name)
 		}
 	}
 
 	// For each application id, get stats from stages & executors endpoints
 	for _, app := range allowedApps {
+		now := appsTime[app.ApplicationID]
+
 		stageStats, err := s.client.StageStats(app.ApplicationID)
 		if err != nil {
 			scrapeErrors.AddPartial(24, err)
@@ -123,6 +158,36 @@ func (s *sparkScraper) scrape(_ context.Context) (pmetric.Metrics, error) {
 		}
 	}
 	return s.mb.Emit(), scrapeErrors.Combine()
+}
+
+func (s *sparkScraper) extractApplicationsTime(apps []models.Application) map[string]pcommon.Timestamp {
+	now := pcommon.NewTimestampFromTime(time.Now())
+	result := make(map[string]pcommon.Timestamp, len(apps))
+
+	for _, app := range apps {
+		for i := len(app.Attempts) - 1; i >= 0; i-- {
+			attempt := app.Attempts[i]
+
+			applicationTime := int64(0)
+			if attempt.LastUpdatedEpoch > 0 {
+				applicationTime = attempt.LastUpdatedEpoch
+			}
+			if attempt.EndTimeEpoch > 0 {
+				applicationTime = attempt.EndTimeEpoch
+			}
+			if attempt.StartTimeEpoch > 0 {
+				applicationTime = attempt.LastUpdatedEpoch
+			}
+
+			if applicationTime != 0 {
+				result[app.ApplicationID] = pcommon.NewTimestampFromTime(time.UnixMilli(applicationTime))
+			} else {
+				result[app.ApplicationID] = now
+			}
+		}
+	}
+
+	return result
 }
 
 func (s *sparkScraper) recordCluster(clusterStats *models.ClusterProperties, now pcommon.Timestamp, appID string, appName string) {

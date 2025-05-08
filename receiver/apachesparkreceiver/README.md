@@ -35,6 +35,16 @@ The following settings are optional:
 - `initial_delay` (default = `1s`): defines how long this receiver waits before starting.
 - `endpoint`: (default = `http://localhost:4040`): Apache Spark endpoint to connect to in the form of `[http][://]{host}[:{port}]`
 - `application_names`: An array of Spark application names for which metrics should be collected. If no application names are specified, metrics will be collected for all Spark applications running on the cluster at the specified endpoint.
+- `application_ids`: An array of Spark application ids for which metrics should be collected. If no application ids are specified, metrics will be collected for all Spark applications running on the cluster at the specified endpoint.
+- `limit`: Limits the number of applications scraped from the Spark history server. If unset, all applications are scraped.
+- `last_updated_epoch_threshold_limit`: Limits application scrapped by lastUpdatedEpoch
+
+The prescedence is the following:
+1. limits:
+- count
+- last_updated_epoch_threshold
+2. application_names and application_ids
+
 
 ### Example Configuration
 
@@ -46,6 +56,11 @@ receivers:
     application_names:
     - PythonStatusAPIDemo
     - PythonLR
+    application_ids:
+    - application_1
+    limits:
+      count: 2
+      last_updated_epoch_threshold: 60s
 ```
 
 The full list of settings exposed for this receiver are documented in [config.go](./config.go) with detailed sample configurations in [testdata/config.yaml](./testdata/config.yaml).

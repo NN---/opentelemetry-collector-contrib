@@ -5,7 +5,9 @@ package apachesparkreceiver // import "github.com/open-telemetry/opentelemetry-c
 
 import (
 	"testing"
+	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/config/confighttp"
 	"go.opentelemetry.io/collector/scraper/scraperhelper"
@@ -46,4 +48,19 @@ func TestValidate(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestApplicationLimitConfig(t *testing.T) {
+	cfg := &Config{}
+
+	cfg.Limits.Count = 2
+	assert.Equal(t, 2, cfg.Limits.Count)
+}
+
+func TestStartTimeEpochLimitConfig(t *testing.T) {
+	cfg := &Config{}
+
+	// Set a specific value
+	cfg.Limits.LastUpdatedEpochThreshold = time.Duration(1680000000)
+	assert.Equal(t, time.Duration(1680000000), cfg.Limits.LastUpdatedEpochThreshold)
 }
