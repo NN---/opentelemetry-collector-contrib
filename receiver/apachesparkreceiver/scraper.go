@@ -82,6 +82,7 @@ func (s *sparkScraper) scrape(_ context.Context) (pmetric.Metrics, error) {
 			for _, attempt := range app.Attempts {
 				if attempt.LastUpdatedEpoch > lastUpdatedEpoch {
 					recentApps = append(recentApps, app)
+				} else {
 					break loop
 				}
 			}
